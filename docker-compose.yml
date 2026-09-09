@@ -1,0 +1,17 @@
+services:
+  redis:
+    image: redis:7.4-alpine
+    container_name: queue-system-redis
+    ports:
+      - '6379:6379'
+    command: ['redis-server', '--appendonly', 'yes']
+    volumes:
+      - queue-system-redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  queue-system-redis-data:

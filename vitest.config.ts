@@ -9,5 +9,8 @@ export default defineConfig({
     globals: true,
     root: './',
     include: ['**/*.spec.ts'],
+    globalSetup: ['./test/setup/global-setup.ts'],
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
   },
 });
