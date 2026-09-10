@@ -1,0 +1,411 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Distributed Payment Processing Flow",
+    "quality_profile": "showcase",
+    "animation": "trace",
+    "views": [
+      {
+        "id": "happy-path",
+        "label": "Successful Payment Flow",
+        "focus": [
+          "api_req",
+          "gateway_queue",
+          "payment_worker",
+          "policy_gate",
+          "gateway_ext",
+          "complete_settle",
+          "api_status"
+        ],
+        "note": "HTTP ingress, queue dispatch, worker pickup, saga reservation, policy evaluation, gateway charge, and completion."
+      },
+      {
+        "id": "policy-resilience",
+        "label": "Policy & Resilience",
+        "focus": [
+          "policy_gate",
+          "gateway_ext",
+          "retry_handler"
+        ],
+        "note": "Adaptive Token Bucket AIMD rate limiting, circuit breaker closed/open/half-open state evaluation, and transient error backoff."
+      },
+      {
+        "id": "failure-dlq",
+        "label": "Recovery & Dead-Letter",
+        "focus": [
+          "gateway_ext",
+          "retry_handler",
+          "compensation_dlq",
+          "dlq_queue"
+        ],
+        "note": "Permanent declines bypass retries; retry exhaustion triggers saga compensation (refund & release) and terminal DLQ routing."
+      },
+      {
+        "id": "observability-evidence",
+        "label": "Observability & Audit",
+        "focus": [
+          "api_req",
+          "redis_store",
+          "payment_worker",
+          "trace_context",
+          "compensation_dlq",
+          "metrics_stream"
+        ],
+        "note": "AsyncLocalStorage correlation ID tracking, OpenTelemetry child spans, append-only Redis ledgers, and live WebSocket telemetry."
+      }
+    ],
+    "output": "docs/architecture/payment-processing-workflow.html"
+  },
+  "lanes": [
+    {
+      "id": "api",
+      "label": "User / API Surface"
+    },
+    {
+      "id": "queue",
+      "label": "Queue Management"
+    },
+    {
+      "id": "runtime",
+      "label": "Agent / Processing Runtime"
+    },
+    {
+      "id": "policy",
+      "label": "Policy Boundary"
+    },
+    {
+      "id": "tools",
+      "label": "Tool Execution"
+    },
+    {
+      "id": "exceptions",
+      "label": "Exception Handling",
+      "variant": "exception"
+    },
+    {
+      "id": "observability",
+      "label": "Observability"
+    }
+  ],
+  "phases": [
+    {
+      "id": "intake",
+      "label": "Intake & Queueing",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "orchestration",
+      "label": "Worker Pickup & Policy Gate",
+      "fromCol": 2,
+      "toCol": 3,
+      "variant": "emphasis"
+    },
+    {
+      "id": "settlement",
+      "label": "Gateway Execution & Finalization",
+      "fromCol": 4,
+      "toCol": 5,
+      "variant": "dashed"
+    }
+  ],
+  "mainPath": [
+    "api_req",
+    "gateway_queue",
+    "payment_worker",
+    "policy_gate",
+    "gateway_ext",
+    "complete_settle",
+    "api_status"
+  ],
+  "nodes": [
+    {
+      "id": "api_req",
+      "lane": "api",
+      "col": 0,
+      "type": "backend",
+      "label": "PaymentsController",
+      "sublabel": "submit() / POST /payments",
+      "tag": "validate & bind corrId",
+      "width": 130
+    },
+    {
+      "id": "api_status",
+      "lane": "api",
+      "col": 5,
+      "type": "frontend",
+      "label": "Payment Status API",
+      "sublabel": "getStatus() / listDeadLetters()",
+      "tag": "HTTP 200/201 response",
+      "width": 130
+    },
+    {
+      "id": "gateway_queue",
+      "lane": "queue",
+      "col": 1,
+      "type": "messagebus",
+      "label": "Gateway Queue",
+      "sublabel": "bull:payments:{gatewayId}",
+      "tag": "Priority 1..3 & Delay",
+      "width": 130
+    },
+    {
+      "id": "dlq_queue",
+      "lane": "queue",
+      "col": 5,
+      "type": "messagebus",
+      "label": "Dead Letter Queue",
+      "sublabel": "bull:payments:dlq",
+      "tag": "terminal job store",
+      "width": 130
+    },
+    {
+      "id": "payment_worker",
+      "lane": "runtime",
+      "col": 2,
+      "type": "backend",
+      "label": "PaymentProcessor",
+      "sublabel": "process() / processJob()",
+      "tag": "acquireExecutionLock",
+      "width": 130
+    },
+    {
+      "id": "complete_settle",
+      "lane": "runtime",
+      "col": 5,
+      "type": "backend",
+      "label": "State Finalization",
+      "sublabel": "transitionToCompleted()",
+      "tag": "idempotency.finalize()",
+      "width": 130
+    },
+    {
+      "id": "policy_gate",
+      "lane": "policy",
+      "col": 3,
+      "type": "security",
+      "label": "Policy Boundary",
+      "sublabel": "TokenBucket & CircuitBreaker",
+      "tag": "waitForToken & allowCall",
+      "width": 130
+    },
+    {
+      "id": "redis_store",
+      "lane": "tools",
+      "col": 0,
+      "type": "database",
+      "label": "Redis State Store",
+      "sublabel": "idempotency & payment hash",
+      "tag": "SET NX EX lease (ADR 0002)",
+      "width": 130
+    },
+    {
+      "id": "gateway_ext",
+      "lane": "tools",
+      "col": 4,
+      "type": "cloud",
+      "label": "Payment Gateway",
+      "sublabel": "PaymentGateway.charge()",
+      "tag": "Saga Step 2: Charge",
+      "width": 130
+    },
+    {
+      "id": "retry_handler",
+      "lane": "exceptions",
+      "col": 4,
+      "type": "messagebus",
+      "label": "Exponential Backoff",
+      "sublabel": "BullMQ retry with jitter",
+      "tag": "AIMD rate decrease",
+      "width": 130
+    },
+    {
+      "id": "compensation_dlq",
+      "lane": "exceptions",
+      "col": 5,
+      "type": "security",
+      "label": "Saga Compensation",
+      "sublabel": "releaseFunds() / refund()",
+      "tag": "transitionToDeadLetter",
+      "width": 130
+    },
+    {
+      "id": "trace_context",
+      "lane": "observability",
+      "col": 2,
+      "type": "backend",
+      "label": "Trace Context",
+      "sublabel": "TraceLogger & OTel withSpan()",
+      "tag": "SPAN_NAMES.PROCESS",
+      "width": 130
+    },
+    {
+      "id": "metrics_stream",
+      "lane": "observability",
+      "col": 3,
+      "type": "frontend",
+      "label": "Metrics & WebSocket",
+      "sublabel": "MetricsCollector & Gateway",
+      "tag": "60s rolling TPS & alerts",
+      "width": 130
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_req_queue",
+      "from": "api_req",
+      "to": "gateway_queue",
+      "label": "submit() & enqueue()",
+      "variant": "emphasis",
+      "role": "main"
+    },
+    {
+      "id": "e_queue_worker",
+      "from": "gateway_queue",
+      "to": "payment_worker",
+      "label": "worker pickup",
+      "variant": "emphasis",
+      "role": "main"
+    },
+    {
+      "id": "e_worker_policy",
+      "from": "payment_worker",
+      "to": "policy_gate",
+      "label": "evaluate policy",
+      "variant": "emphasis",
+      "role": "main"
+    },
+    {
+      "id": "e_policy_charge",
+      "from": "policy_gate",
+      "to": "gateway_ext",
+      "label": "token granted & closed",
+      "variant": "emphasis",
+      "role": "main"
+    },
+    {
+      "id": "e_charge_complete",
+      "from": "gateway_ext",
+      "to": "complete_settle",
+      "label": "charge OK -> settle",
+      "variant": "emphasis",
+      "role": "main"
+    },
+    {
+      "id": "e_complete_status",
+      "from": "complete_settle",
+      "to": "api_status",
+      "label": "status: completed",
+      "variant": "emphasis",
+      "role": "main"
+    },
+    {
+      "id": "e_charge_retry",
+      "from": "gateway_ext",
+      "to": "retry_handler",
+      "label": "transient 429/503/5xx",
+      "variant": "dashed",
+      "role": "branch"
+    },
+    {
+      "id": "e_retry_worker",
+      "from": "retry_handler",
+      "to": "payment_worker",
+      "label": "retry attempt",
+      "variant": "dashed",
+      "role": "return"
+    },
+    {
+      "id": "e_charge_comp",
+      "from": "gateway_ext",
+      "to": "compensation_dlq",
+      "label": "permanent decline",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "e_retry_comp",
+      "from": "retry_handler",
+      "to": "compensation_dlq",
+      "label": "retries spent",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "e_comp_dlq",
+      "from": "compensation_dlq",
+      "to": "dlq_queue",
+      "label": "routeToDlq(dlq)",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "e_worker_trace",
+      "from": "payment_worker",
+      "to": "trace_context",
+      "label": "bind corrId & span",
+      "variant": "dashed",
+      "role": "async"
+    },
+    {
+      "id": "e_req_redis",
+      "from": "api_req",
+      "to": "redis_store",
+      "label": "lease claim (ADR 0002)",
+      "variant": "dashed",
+      "role": "async"
+    },
+    {
+      "id": "e_comp_metrics",
+      "from": "compensation_dlq",
+      "to": "metrics_stream",
+      "label": "emit alert:raised",
+      "variant": "dashed",
+      "role": "async"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Primary Flow (Happy Path)",
+      "items": [
+        "API Request validates payload and claims an atomic Redis idempotency lease (ADR 0002)",
+        "Job is enqueued to dedicated per-gateway BullMQ queue with numeric priority (1: high, 2: normal, 3: low)",
+        "Worker executes 3-step saga: reserve funds -> charge gateway -> settle ledger",
+        "Successful charge notifies rate limiter (AI step) and closes circuit breaker",
+        "Terminal state COMPLETED persisted and emitted to WebSocket stream"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Resilience & Policy Boundary",
+      "items": [
+        "Adaptive Token Bucket enforces throughput limits with AIMD backoff on 429/503",
+        "Circuit Breaker samples failure rates in sliding window; fast-fails when OPEN",
+        "Transient errors trigger BullMQ exponential backoff + jitter retry loop",
+        "Execution locks prevent concurrent worker duplicate processing"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Failure Recovery & DLQ",
+      "items": [
+        "Permanent declines (card declined, fraud) skip retries and route directly to DLQ",
+        "Settle failure triggers automated compensation: charge refund + fund release",
+        "Critical alert raised if compensation refund fails",
+        "Jobs exhausting max retries are routed to terminal dead-letter queue"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Observability & Telemetry",
+      "items": [
+        "Correlation ID propagated across HTTP headers, BullMQ jobs, and gateway calls",
+        "OpenTelemetry spans track enqueue, process, reserve, charge, settle, and DLQ",
+        "Redis immutable audit log and settlement ledger provide full financial traceability",
+        "MetricsCollector computes 60s rolling TPS, P95/P99 latencies, and queue depths"
+      ]
+    }
+  ]
+}
