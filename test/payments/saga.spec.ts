@@ -5,6 +5,7 @@ import { AuditLogService } from '../../src/payments/audit-log.service.js';
 import { PaymentStore } from '../../src/payments/payment-store.service.js';
 import { SettlementLedger } from '../../src/payments/settlement-ledger.service.js';
 import { MockGatewayRegistry } from '../../src/gateway/mock-gateway.service.js';
+import { EventBus } from '../../src/common/event-bus.js';
 import { createTestApp, waitFor } from '../helpers/test-app.js';
 
 /**
@@ -185,6 +186,32 @@ describe('Ticket 06 — compensation: a settle failure refunds the charge and re
     );
     const refundAudit = entries.find((e) => e.type === 'saga.compensate.refund_charge');
     expect(refundAudit?.detail).toMatchObject({ ok: true });
+  });
+
+  it('emits a critical alert when refund compensation fails', async () => {
+    gateways.configure('sagaset_fail', {
+      latencyMinMs: 2,
+      latencyMaxMs: 2,
+      refundSteps: [{ kind: 'fail', httpStatus: 500 }],
+    });
+    const events = app.get(EventBus);
+    const alerts: unknown[] = [];
+    events.on('metrics.alert', (e) => {
+      if (e.type === 'metrics.alert') alerts.push(e.alert);
+    });
+
+    const id = `pay_sagafail_${randomUUID()}`;
+    await request(http)
+      .post('/payments')
+      .send({ id, amount: 700, currency: 'USD', customerId: 'cust_fail', gatewayId: 'sagaset_fail' })
+      .expect(201);
+
+    await waitFor(async () => (await store.get(id))?.status === 'dead_letter', {
+      label: 'settle failure with failed refund dead-letters',
+    });
+
+    expect(alerts.length).toBeGreaterThanOrEqual(1);
+    expect((alerts[0] as { severity: string }).severity).toBe('critical');
   });
 });
 

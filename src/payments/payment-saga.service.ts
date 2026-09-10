@@ -251,6 +251,18 @@ export class PaymentSagaService {
         type: 'saga.compensate.refund_charge',
         detail: { transactionId, ok: false, failure: refund.failure.message },
       });
+      const alertMsg = `CRITICAL: Payment ${record.id} compensation refund failed for charge ${transactionId}: ${refund.failure.message}`;
+      this.traceLog.error(alertMsg, PaymentSagaService.name);
+      await this.events.emit({
+        type: 'metrics.alert',
+        alert: {
+          id: `saga.compensation_failed.${record.id}`,
+          severity: 'critical',
+          message: alertMsg,
+          raisedAt: new Date().toISOString(),
+        },
+        at: new Date().toISOString(),
+      });
       return;
     }
     record.refundId = refund.refundId;
