@@ -22,7 +22,7 @@
         "id": "resilience-dlq",
         "label": "Gateway resilience and DLQ",
         "focus": ["gateway_queue", "dlq", "worker_pool", "saga_service", "resilience", "gateways"],
-        "note": "Token bucket rate limiting and circuit breakers protect gateways, routing terminal failures to the DLQ."
+        "note": "Gateway Guard sequences token bucket and circuit breaker controls, routing terminal failures to DLQ."
       },
       {
         "id": "live-observability",
@@ -117,7 +117,7 @@
     {
       "id": "resilience",
       "type": "security",
-      "label": "Resilience Guard",
+      "label": "Gateway Guard",
       "sublabel": "Breaker & Bucket",
       "pos": [1030, 270],
       "size": [140, 60]
@@ -220,14 +220,14 @@
       "id": "saga-to-resilience",
       "from": "saga_service",
       "to": "resilience",
-      "label": "protect",
+      "label": "gated call",
       "variant": "security"
     },
     {
       "id": "resilience-to-gateways",
       "from": "resilience",
       "to": "gateways",
-      "label": "settle",
+      "label": "charge",
       "variant": "emphasis",
       "fromSide": "bottom",
       "toSide": "top",
@@ -246,11 +246,11 @@
     },
     {
       "dot": "emerald",
-      "title": "Saga Orchestration & Resilience",
+      "title": "Saga Orchestration & Gateway Guard",
       "items": [
         "Workers coordinate 3-step saga: Reserve -> Charge -> Settle & Audit",
+        "Gateway Guard acts as the single seam sequencing rate limiting & circuit breaking",
         "Adaptive Token Bucket throttles throughput with AIMD backoff",
-        "Circuit breaker trips to OPEN on sustained provider errors",
         "Unrecoverable or retry-exhausted payments divert to DLQ"
       ]
     },

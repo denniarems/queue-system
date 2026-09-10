@@ -22,13 +22,13 @@
       },
       {
         "id": "policy-resilience",
-        "label": "Policy & Resilience",
+        "label": "Gateway Guard & Resilience",
         "focus": [
           "policy_gate",
           "gateway_ext",
           "retry_handler"
         ],
-        "note": "Adaptive Token Bucket AIMD rate limiting, circuit breaker closed/open/half-open state evaluation, and transient error backoff."
+        "note": "Gateway Guard coordinates token bucket rate limiting, circuit breaker gating, and error classification."
       },
       {
         "id": "failure-dlq",
@@ -72,7 +72,7 @@
     },
     {
       "id": "policy",
-      "label": "Policy Boundary"
+      "label": "Gateway Guard"
     },
     {
       "id": "tools",
@@ -97,7 +97,7 @@
     },
     {
       "id": "orchestration",
-      "label": "Worker Pickup & Policy Gate",
+      "label": "Worker Pickup & Gateway Guard",
       "fromCol": 2,
       "toCol": 3,
       "variant": "emphasis"
@@ -185,9 +185,9 @@
       "lane": "policy",
       "col": 3,
       "type": "security",
-      "label": "Policy Boundary",
-      "sublabel": "TokenBucket & CircuitBreaker",
-      "tag": "waitForToken & allowCall",
+      "label": "Gateway Guard",
+      "sublabel": "GatewayGuard.call()",
+      "tag": "token wait & breaker gate",
       "width": 130
     },
     {
@@ -272,7 +272,7 @@
       "id": "e_worker_policy",
       "from": "payment_worker",
       "to": "policy_gate",
-      "label": "evaluate policy",
+      "label": "guard.call()",
       "variant": "emphasis",
       "role": "main"
     },
@@ -372,19 +372,19 @@
       "items": [
         "API Request validates payload and claims an atomic Redis idempotency lease (ADR 0002)",
         "Job is enqueued to dedicated per-gateway BullMQ queue with numeric priority (1: high, 2: normal, 3: low)",
-        "Worker executes 3-step saga: reserve funds -> charge gateway -> settle ledger",
-        "Successful charge notifies rate limiter (AI step) and closes circuit breaker",
+        "Worker executes 3-step saga: reserve funds -> Gateway Guard call -> settle ledger",
+        "Gateway Guard feeds outcome to rate limiter (AIMD) and updates circuit breaker",
         "Terminal state COMPLETED persisted and emitted to WebSocket stream"
       ]
     },
     {
       "dot": "amber",
-      "title": "Resilience & Policy Boundary",
+      "title": "Gateway Guard & Resilience",
       "items": [
+        "Gateway Guard acts as single seam: sequences token wait, breaker gate, and provider call",
         "Adaptive Token Bucket enforces throughput limits with AIMD backoff on 429/503",
         "Circuit Breaker samples failure rates in sliding window; fast-fails when OPEN",
-        "Transient errors trigger BullMQ exponential backoff + jitter retry loop",
-        "Execution locks prevent concurrent worker duplicate processing"
+        "Transient errors trigger BullMQ exponential backoff + jitter retry loop"
       ]
     },
     {
