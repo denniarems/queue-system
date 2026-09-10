@@ -1,0 +1,266 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Distributed Payment Processing Queue System",
+    "output": "payment-processing.html",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "primary-path",
+        "label": "Primary payment flow",
+        "focus": ["clients", "api_ingress", "queue_mgr", "gateway_queue", "worker_pool", "saga_service", "resilience", "gateways"],
+        "note": "Trace a payment from HTTP ingestion through dynamic queues, worker pool saga orchestration, and external gateway authorization."
+      },
+      {
+        "id": "idempotency-flow",
+        "label": "Idempotency acquisition",
+        "focus": ["clients", "api_ingress", "idempotency"],
+        "note": "Verify and acquire payment execution lease in Redis before queuing to prevent duplicate charges."
+      },
+      {
+        "id": "resilience-dlq",
+        "label": "Gateway resilience and DLQ",
+        "focus": ["gateway_queue", "dlq", "worker_pool", "saga_service", "resilience", "gateways"],
+        "note": "Token bucket rate limiting and circuit breakers protect gateways, routing terminal failures to the DLQ."
+      },
+      {
+        "id": "live-observability",
+        "label": "Live metrics and alerts",
+        "focus": ["worker_pool", "metrics", "ws_gateway"],
+        "note": "Continuous sliding-window latency and TPS telemetry broadcasted to operational dashboards."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "clients",
+      "type": "external",
+      "label": "API Clients",
+      "sublabel": "HTTP Client",
+      "pos": [40, 270],
+      "size": [130, 60]
+    },
+    {
+      "id": "idempotency",
+      "type": "database",
+      "label": "Idempotency",
+      "sublabel": "Redis Lease",
+      "pos": [230, 120],
+      "size": [130, 60],
+      "brand": "redis"
+    },
+    {
+      "id": "api_ingress",
+      "type": "backend",
+      "label": "Payment Ingress",
+      "sublabel": "NestJS Controller",
+      "pos": [230, 270],
+      "size": [130, 60]
+    },
+    {
+      "id": "queue_mgr",
+      "type": "backend",
+      "label": "Queue Manager",
+      "sublabel": "Partitioner",
+      "pos": [430, 120],
+      "size": [130, 60]
+    },
+    {
+      "id": "gateway_queue",
+      "type": "messagebus",
+      "label": "Gateway Queues",
+      "sublabel": "BullMQ Queues",
+      "pos": [430, 270],
+      "size": [130, 60]
+    },
+    {
+      "id": "dlq",
+      "type": "messagebus",
+      "label": "Dead Letter Queue",
+      "sublabel": "Terminal Failures",
+      "pos": [430, 420],
+      "size": [130, 60]
+    },
+    {
+      "id": "metrics",
+      "type": "backend",
+      "label": "Metrics Collector",
+      "sublabel": "Rolling P95/P99",
+      "pos": [630, 120],
+      "size": [130, 60]
+    },
+    {
+      "id": "worker_pool",
+      "type": "backend",
+      "label": "Payment Worker",
+      "sublabel": "BullMQ Consumer",
+      "pos": [630, 270],
+      "size": [130, 60]
+    },
+    {
+      "id": "ws_gateway",
+      "type": "frontend",
+      "label": "Ops Dashboard",
+      "sublabel": "Socket.IO Stream",
+      "pos": [830, 120],
+      "size": [130, 60]
+    },
+    {
+      "id": "saga_service",
+      "type": "backend",
+      "label": "Payment Saga",
+      "sublabel": "3-Step Saga",
+      "pos": [830, 270],
+      "size": [130, 60]
+    },
+    {
+      "id": "resilience",
+      "type": "security",
+      "label": "Resilience Guard",
+      "sublabel": "Breaker & Bucket",
+      "pos": [1030, 270],
+      "size": [140, 60]
+    },
+    {
+      "id": "gateways",
+      "type": "external",
+      "label": "Gateways",
+      "sublabel": "Stripe / PayPal",
+      "pos": [1030, 420],
+      "size": [140, 60],
+      "brand": "stripe"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Payment Processing Cluster",
+      "wraps": ["api_ingress", "idempotency", "queue_mgr", "gateway_queue", "dlq", "worker_pool", "metrics", "ws_gateway", "saga_service", "resilience"]
+    },
+    {
+      "kind": "security-group",
+      "label": "Queue & Execution Workers",
+      "wraps": ["gateway_queue", "dlq", "worker_pool", "saga_service", "resilience"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "clients-to-ingress",
+      "from": "clients",
+      "to": "api_ingress",
+      "label": "HTTPS",
+      "variant": "emphasis"
+    },
+    {
+      "id": "ingress-to-idempotency",
+      "from": "api_ingress",
+      "to": "idempotency",
+      "label": "lease",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "ingress-to-queue-mgr",
+      "from": "api_ingress",
+      "to": "queue_mgr",
+      "label": "enqueue",
+      "variant": "emphasis"
+    },
+    {
+      "id": "queue-mgr-to-queues",
+      "from": "queue_mgr",
+      "to": "gateway_queue",
+      "label": "partition",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 30
+    },
+    {
+      "id": "queues-to-dlq",
+      "from": "gateway_queue",
+      "to": "dlq",
+      "label": "failed",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 30
+    },
+    {
+      "id": "queues-to-worker",
+      "from": "gateway_queue",
+      "to": "worker_pool",
+      "label": "dispatch",
+      "variant": "emphasis"
+    },
+    {
+      "id": "worker-to-metrics",
+      "from": "worker_pool",
+      "to": "metrics",
+      "label": "telemetry",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "metrics-to-ws",
+      "from": "metrics",
+      "to": "ws_gateway",
+      "label": "stream"
+    },
+    {
+      "id": "worker-to-saga",
+      "from": "worker_pool",
+      "to": "saga_service",
+      "label": "execute",
+      "variant": "emphasis"
+    },
+    {
+      "id": "saga-to-resilience",
+      "from": "saga_service",
+      "to": "resilience",
+      "label": "protect",
+      "variant": "security"
+    },
+    {
+      "id": "resilience-to-gateways",
+      "from": "resilience",
+      "to": "gateways",
+      "label": "settle",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 30
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Ingress & Deduplication",
+      "items": [
+        "API clients submit requests with correlation and idempotency keys",
+        "Two-phase Redis lease prevents duplicate payment processing",
+        "Queue Manager dynamically routes to per-gateway BullMQ queues"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Saga Orchestration & Resilience",
+      "items": [
+        "Workers coordinate 3-step saga: Reserve -> Charge -> Settle & Audit",
+        "Adaptive Token Bucket throttles throughput with AIMD backoff",
+        "Circuit breaker trips to OPEN on sustained provider errors",
+        "Unrecoverable or retry-exhausted payments divert to DLQ"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Live Observability",
+      "items": [
+        "In-memory rolling window computes real-time TPS and P95/P99 latency",
+        "Socket.IO gateway broadcasts live metrics and operational alerts"
+      ]
+    }
+  ]
+}
