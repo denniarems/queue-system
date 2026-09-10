@@ -4,7 +4,6 @@ import { REDIS_CLIENT } from '../redis/redis.module.js';
 import { AuditEvent } from '../domain/payment.js';
 
 const keyFor = (paymentId: string) => `audit:payment:${paymentId}`;
-const AUDIT_TTL_SECONDS = 7 * 86_400;
 
 /**
  * Immutable, append-only audit log per payment (Redis list). Entries are only
@@ -19,7 +18,6 @@ export class AuditLogService {
     const entry: AuditEvent = { ...event, at: event.at ?? new Date().toISOString() };
     const key = keyFor(event.paymentId);
     await this.redis.rpush(key, JSON.stringify(entry));
-    await this.redis.expire(key, AUDIT_TTL_SECONDS);
   }
 
   async list(paymentId: string): Promise<AuditEvent[]> {
