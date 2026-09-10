@@ -83,7 +83,6 @@ export class MockGateway implements PaymentGateway {
           code: step.code ?? classifyHttpStatus(step.httpStatus),
           message: `gateway ${this.id} rejected with HTTP ${step.httpStatus}`,
           httpStatus: step.httpStatus,
-          retryable: step.retryable ?? (step.httpStatus === 429 || step.httpStatus >= 500),
         },
       };
     }
@@ -108,7 +107,6 @@ export class MockGateway implements PaymentGateway {
           code: step.code ?? classifyHttpStatus(step.httpStatus),
           message: `gateway ${this.id} refund rejected with HTTP ${step.httpStatus}`,
           httpStatus: step.httpStatus,
-          retryable: step.retryable ?? false,
         },
       };
     }

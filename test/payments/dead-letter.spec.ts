@@ -1,7 +1,7 @@
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
-import { CircuitBreakerRegistry } from '../../src/gateway/circuit-breaker.registry.js';
+import { GatewayGuard } from '../../src/gateway/gateway-guard.js';
 import { MockGatewayRegistry } from '../../src/gateway/mock-gateway.service.js';
 import { PaymentStore } from '../../src/payments/payment-store.service.js';
 import { IdempotencyService } from '../../src/payments/idempotency.service.js';
@@ -16,7 +16,7 @@ describe('Ticket 05 — error classification and DLQ routing', () => {
   let app: INestApplication;
   let http: ReturnType<INestApplication['getHttpServer']>;
   let gateways: MockGatewayRegistry;
-  let breakers: CircuitBreakerRegistry;
+  let guard: GatewayGuard;
   let store: PaymentStore;
   let idempotency: IdempotencyService;
 
@@ -28,7 +28,7 @@ describe('Ticket 05 — error classification and DLQ routing', () => {
     });
     http = app.getHttpServer();
     gateways = app.get(MockGatewayRegistry);
-    breakers = app.get(CircuitBreakerRegistry);
+    guard = app.get(GatewayGuard);
     store = app.get(PaymentStore);
     idempotency = app.get(IdempotencyService);
   });
@@ -47,7 +47,7 @@ describe('Ticket 05 — error classification and DLQ routing', () => {
       latencyMinMs: 2,
       latencyMaxMs: 2,
       steps: [],
-      after: { kind: 'fail', httpStatus: 400, retryable: false },
+      after: { kind: 'fail', httpStatus: 400 },
     });
 
     await request(http).post('/payments').send(body(id, 'permw')).expect(201);
@@ -64,8 +64,8 @@ describe('Ticket 05 — error classification and DLQ routing', () => {
     expect(gateways.get('permw').stats.charges).toBe(1);
 
     // Business rejections are not provider degradation: breaker stays CLOSED.
-    expect(breakers.get('permw').getState().state).toBe('CLOSED');
-    expect(breakers.get('permw').getState().samples).toBe(0);
+    expect(guard.health('permw').state).toBe('CLOSED');
+    expect(guard.health('permw').samples).toBe(0);
 
     // DLQ endpoint returns the dead letter for inspection.
     const dlq = await request(http).get(`/queues/dlq?gatewayId=permw`).expect(200);

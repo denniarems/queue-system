@@ -9,8 +9,6 @@ export interface GatewayFailure {
   code: PaymentErrorCode;
   message: string;
   httpStatus: number;
-  /** false for business rejections (declined cards, fraud...) — no retry. */
-  retryable: boolean;
 }
 
 export type GatewayChargeResult =
@@ -39,7 +37,7 @@ export interface GatewayCallContext {
 /** Deterministic failure script consumed by the mock gateway, one entry per charge call. */
 export type MockStep =
   | { kind: 'ok'; latencyMs?: number }
-  | { kind: 'fail'; httpStatus: number; code?: PaymentErrorCode; retryable?: boolean };
+  | { kind: 'fail'; httpStatus: number; code?: PaymentErrorCode };
 
 export interface MockGatewayBehavior {
   /** Random latency bounds in ms applied to successful calls. */

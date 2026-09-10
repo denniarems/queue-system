@@ -67,7 +67,7 @@ describe('Ticket 07 — MetricsCollector: accuracy of TPS / error rate / percent
       latencyMinMs: 2,
       latencyMaxMs: 2,
       steps: [],
-      after: { kind: 'fail', httpStatus: 400, retryable: false },
+      after: { kind: 'fail', httpStatus: 400 },
     });
     const ids = Array.from({ length: 2 }, () => `pay_err_${randomUUID()}`);
     for (const id of ids) {

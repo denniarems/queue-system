@@ -3,7 +3,7 @@ import request from 'supertest';
 import { randomUUID } from 'node:crypto';
 import { CircuitBreaker } from '../../src/gateway/circuit-breaker.js';
 import { CircuitBreakerParams } from '../../src/gateway/circuit-breaker.js';
-import { CircuitBreakerRegistry } from '../../src/gateway/circuit-breaker.registry.js';
+import { GatewayGuard } from '../../src/gateway/gateway-guard.js';
 import { MockGatewayRegistry } from '../../src/gateway/mock-gateway.service.js';
 import { EventBus } from '../../src/common/event-bus.js';
 import { createTestApp, waitFor } from '../helpers/test-app.js';
@@ -69,7 +69,7 @@ describe('Ticket 05 — CircuitBreaker (unit): state machine', () => {
 describe('Ticket 05 — breaker integration: trips on 5xx, fast-fails without gateway calls, recovers on HALF_OPEN probe', () => {
   let app: INestApplication;
   let http: ReturnType<INestApplication['getHttpServer']>;
-  let breakers: CircuitBreakerRegistry;
+  let guard: GatewayGuard;
   let gateways: MockGatewayRegistry;
   let opened: string[];
   let closed: string[];
@@ -82,7 +82,7 @@ describe('Ticket 05 — breaker integration: trips on 5xx, fast-fails without ga
       return cfg;
     });
     http = app.getHttpServer();
-    breakers = app.get(CircuitBreakerRegistry);
+    guard = app.get(GatewayGuard);
     gateways = app.get(MockGatewayRegistry);
     const bus = app.get(EventBus);
     opened = [];
@@ -99,7 +99,7 @@ describe('Ticket 05 — breaker integration: trips on 5xx, fast-fails without ga
       steps: [],
       after: { kind: 'fail', httpStatus: 503 },
     });
-    breakers.configure('brgw', { minSamples: 3, failureThreshold: 0.5, cooldownMs: 500, windowMs: 5000 });
+    guard.configure('brgw', { circuitBreaker: { minSamples: 3, failureThreshold: 0.5, cooldownMs: 500, windowMs: 5000 } });
   });
 
   afterAll(async () => {
@@ -139,7 +139,7 @@ describe('Ticket 05 — breaker integration: trips on 5xx, fast-fails without ga
       async () => (await request(http).get(`/payments/${q}`)).body.status === 'completed',
       { label: 'payment completes after recovery', timeoutMs: 20_000 },
     );
-    await waitFor(() => breakers.get('brgw').getState().state === 'CLOSED', {
+    await waitFor(() => guard.health('brgw').state === 'CLOSED', {
       label: 'breaker closes after probe success',
     });
 

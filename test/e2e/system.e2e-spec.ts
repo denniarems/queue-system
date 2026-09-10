@@ -3,7 +3,7 @@ import request from 'supertest';
 import { randomUUID } from 'node:crypto';
 import { TracingService } from '../../src/tracing/tracing.service.js';
 import { MockGatewayRegistry } from '../../src/gateway/mock-gateway.service.js';
-import { RateLimiterRegistry } from '../../src/gateway/rate-limiter.registry.js';
+import { GatewayGuard } from '../../src/gateway/gateway-guard.js';
 import { createTestAppWithWebSocket, waitFor } from '../helpers/test-app.js';
 
 /**
@@ -117,7 +117,7 @@ describe('Ticket 08 — correlation propagation and OpenTelemetry spans', () => 
 
     // ---- chaos 3: rate-limit burst throttles but loses nothing ----
     gateways.configure('rlchaos', { latencyMinMs: 3, latencyMaxMs: 3 });
-    app.get(RateLimiterRegistry).configure('rlchaos', { nominalRps: 6, burstFactor: 0.5 });
+    app.get(GatewayGuard).configure('rlchaos', { rateLimiter: { nominalRps: 6, burstFactor: 0.5 } });
 
     const burst = Array.from({ length: 8 }, () => `pay_burst_${randomUUID()}`);
     for (const id of burst) {

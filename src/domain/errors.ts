@@ -29,18 +29,28 @@ export const RETRYABLE_CODES: ReadonlySet<PaymentErrorCode> = new Set([
   ERROR_CODES.GATEWAY_TIMEOUT,
   ERROR_CODES.SERVER_ERROR,
   ERROR_CODES.NETWORK_ERROR,
+  // An unclassifiable failure is never a proven business rejection, so presume
+  // it transient and let the worker's bounded retry budget decide.
+  ERROR_CODES.UNKNOWN,
 ]);
 
 export class PaymentProcessingError extends Error {
+  /**
+   * Derived from `code`, never supplied: retry policy is ours, not a property
+   * the provider's response carries. Keeping it derived means the two can
+   * never disagree.
+   */
+  readonly retryable: boolean;
+
   constructor(
     message: string,
     readonly code: PaymentErrorCode,
-    readonly retryable: boolean,
     readonly httpStatus?: number,
     readonly gatewayId?: string,
   ) {
     super(message);
     this.name = 'PaymentProcessingError';
+    this.retryable = isTransient(code);
   }
 }
 
@@ -58,17 +68,16 @@ export function classifyHttpStatus(httpStatus: number): PaymentErrorCode {
   return ERROR_CODES.UNKNOWN;
 }
 
+/** Classify anything that is not already a classified failure. */
 export function toPaymentProcessingError(
   raw: unknown,
   gatewayId: string,
   fallbackCode: PaymentErrorCode = ERROR_CODES.UNKNOWN,
 ): PaymentProcessingError {
   if (raw instanceof PaymentProcessingError) return raw;
-  const code = fallbackCode;
   return new PaymentProcessingError(
     raw instanceof Error ? raw.message : String(raw),
-    code,
-    isTransient(code),
+    fallbackCode,
     undefined,
     gatewayId,
   );

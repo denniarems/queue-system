@@ -1,13 +1,9 @@
-import { Inject, Injectable } from '@nestjs/common';
-import { APP_CONFIG } from '../config/app-config.js';
-import type { AppConfig } from '../config/app-config.js';
+import { Injectable } from '@nestjs/common';
 import { EventBus } from '../common/event-bus.js';
 import { TraceLogger } from '../common/trace-logger.js';
 import { ERROR_CODES, PaymentProcessingError } from '../domain/errors.js';
 import { PaymentRecord, SagaHistoryEntry } from '../domain/payment.js';
-import { MockGatewayRegistry } from '../gateway/mock-gateway.service.js';
-import { RateLimiterRegistry } from '../gateway/rate-limiter.registry.js';
-import { CircuitBreakerRegistry } from '../gateway/circuit-breaker.registry.js';
+import { GatewayGuard } from '../gateway/gateway-guard.js';
 import { SPAN_NAMES, TracingService } from '../tracing/tracing.service.js';
 import { AuditLogService } from './audit-log.service.js';
 import { PaymentStore } from './payment-store.service.js';
@@ -24,6 +20,12 @@ export interface SagaOutcome {
  *  - charge failure (transient or permanent)  -> release the reservation
  *  - settle failure after a successful charge -> refund the charge + release
  *
+ * The outbound gateway attempt is not the saga's business: it crosses the
+ * Gateway Guard (ADR 0005), which rate limits, breaker-gates, invokes the
+ * Payment Gateway and classifies the outcome. Charge failures and gating
+ * refusals arrive here as one shape, so this module never reads a provider
+ * status code or a circuit state.
+ *
  * Every step transition and compensation is persisted in the payment record
  * and appended to the immutable audit log before the saga returns or throws.
  */
@@ -32,14 +34,11 @@ export class PaymentSagaService {
   constructor(
     private readonly store: PaymentStore,
     private readonly audit: AuditLogService,
-    private readonly gateways: MockGatewayRegistry,
-    private readonly rateLimiters: RateLimiterRegistry,
-    private readonly breakers: CircuitBreakerRegistry,
+    private readonly guard: GatewayGuard,
     private readonly ledger: SettlementLedger,
     private readonly events: EventBus,
     private readonly tracing: TracingService,
     private readonly traceLog: TraceLogger,
-    @Inject(APP_CONFIG) private readonly config: AppConfig,
   ) {}
 
   /**
@@ -76,61 +75,17 @@ export class PaymentSagaService {
       at: new Date().toISOString(),
     });
 
-    // ---- Step 2: charge through the payment gateway (rate limiter gated) ----
-    const gateway = this.gateways.get(payment.gatewayId);
-    const bucket = this.rateLimiters.get(payment.gatewayId);
-    const hasToken = await bucket.waitForToken(this.config.rateLimiter.tokenWaitMs);
-    if (!hasToken) {
-      await this.history(record, 'charge', 'rate_limited', 'no token within tokenWaitMs');
-      await this.releaseFunds(record, reservationId);
-      await this.store.save(record);
-      await this.events.emit({
-        type: 'saga.phase',
-        paymentId: payment.id,
-        gatewayId: payment.gatewayId,
-        phase: 'charge',
-        outcome: 'failed',
-        at: new Date().toISOString(),
-      });
-      throw new PaymentProcessingError(
-        `gateway ${payment.gatewayId} rate limiter: no token within ${this.config.rateLimiter.tokenWaitMs}ms`,
-        ERROR_CODES.RATE_LIMITED,
-        true,
-        429,
-        payment.gatewayId,
-      );
-    }
-    // Circuit breaker: fast-fail while OPEN without invoking the gateway.
-    const breaker = this.breakers.get(payment.gatewayId);
-    const gate = breaker.allowCall();
-    if (!gate.allowed) {
-      await this.history(record, 'charge', 'circuit_open', `breaker ${gate.state}; not calling gateway`);
-      await this.withCompensation(record, 'release_funds', () => this.releaseFunds(record, reservationId));
-      await this.store.save(record);
-      await this.events.emit({
-        type: 'saga.phase',
-        paymentId: payment.id,
-        gatewayId: payment.gatewayId,
-        phase: 'charge',
-        outcome: 'failed',
-        at: new Date().toISOString(),
-      });
-      throw new PaymentProcessingError(
-        `gateway ${payment.gatewayId} circuit is ${gate.state}; call fast-failed`,
-        ERROR_CODES.CIRCUIT_OPEN,
-        true,
-        503,
-        payment.gatewayId,
-      );
-    }
-
-    const charge = await this.tracing.withSpan(
+    // ---- Step 2: charge through the Gateway Guard (ADR 0005) ----
+    // Token wait, breaker gate, the gateway call, failure classification and
+    // the feedback into both controls all happen behind this one call. A
+    // gating refusal and a gateway rejection are the same shape here.
+    const outcome = await this.tracing.withSpan(
       SPAN_NAMES.CHARGE,
       { paymentId: payment.id, gatewayId: payment.gatewayId, correlationId: record.correlationId ?? '' },
-      async () => gateway.charge(payment, { correlationId: record.correlationId }),
+      () => this.guard.call(payment, { correlationId: record.correlationId }),
     );
-    if (!charge.ok) {
-      await this.history(record, 'charge', 'failure', `${charge.failure.code}: ${charge.failure.message}`);
+    if (!outcome.ok) {
+      await this.history(record, 'charge', 'failure', outcome.error.code);
       await this.withCompensation(record, 'release_funds', () => this.releaseFunds(record, reservationId));
       await this.store.save(record);
       await this.events.emit({
@@ -141,34 +96,20 @@ export class PaymentSagaService {
         outcome: 'failed',
         at: new Date().toISOString(),
       });
-      if (charge.failure.httpStatus === 429 || charge.failure.httpStatus === 503) {
-        bucket.onThrottled();
-      }
-      // Only transient outcomes (5xx/429/network) sample provider health;
-      // permanent business rejections are excluded from breaker statistics.
-      if (charge.failure.retryable) {
-        breaker.recordOutcome(false);
-      }
-      throw new PaymentProcessingError(
-        charge.failure.message,
-        charge.failure.code,
-        charge.failure.retryable,
-        charge.failure.httpStatus,
-        payment.gatewayId,
-      );
+      // Thrown for the worker's benefit: whether to retry is the budget's call.
+      throw outcome.error;
     }
 
-    breaker.recordOutcome(true);
-    bucket.onSuccess();
-    record.transactionId = charge.transactionId;
+    const transactionId = outcome.transactionId;
+    record.transactionId = transactionId;
     record.reservationId = reservationId;
     record.sagaState = 'charged';
-    await this.history(record, 'charge', 'ok', charge.transactionId);
+    await this.history(record, 'charge', 'ok', transactionId);
     await this.store.save(record);
     await this.audit.record({
       paymentId: payment.id,
       type: 'saga.charge',
-      detail: { transactionId: charge.transactionId, httpStatus: charge.httpStatus },
+      detail: { transactionId, httpStatus: outcome.httpStatus },
     });
     await this.events.emit({
       type: 'saga.phase',
@@ -185,13 +126,13 @@ export class PaymentSagaService {
         SPAN_NAMES.SETTLE,
         { paymentId: payment.id, gatewayId: payment.gatewayId, correlationId: record.correlationId ?? '' },
         async () => {
-          await this.ledger.settle(payment, charge.transactionId);
+          await this.ledger.settle(payment, transactionId);
         },
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       await this.history(record, 'settle', 'failure', message);
-      await this.withCompensation(record, 'refund_charge', () => this.refundCharge(record, charge.transactionId));
+      await this.withCompensation(record, 'refund_charge', () => this.refundCharge(record, transactionId));
       await this.withCompensation(record, 'release_funds', () => this.releaseFunds(record, reservationId));
       record.sagaState = 'compensated';
       await this.store.save(record);
@@ -204,20 +145,19 @@ export class PaymentSagaService {
         at: new Date().toISOString(),
       });
       throw new PaymentProcessingError(
-        `settle failed after successful charge (${message}); charge ${charge.transactionId} was refunded`,
+        `settle failed after successful charge (${message}); charge ${transactionId} was refunded`,
         ERROR_CODES.SETTLE_FAILED,
-        false,
         undefined,
         payment.gatewayId,
       );
     }
 
     record.sagaState = 'settled';
-    await this.history(record, 'settle', 'ok', charge.transactionId);
+    await this.history(record, 'settle', 'ok', transactionId);
     await this.audit.record({
       paymentId: payment.id,
       type: 'saga.settle',
-      detail: { transactionId: charge.transactionId },
+      detail: { transactionId },
     });
     await this.events.emit({
       type: 'saga.phase',
@@ -228,7 +168,7 @@ export class PaymentSagaService {
       at: new Date().toISOString(),
     });
 
-    return { transactionId: charge.transactionId, reservationId };
+    return { transactionId, reservationId };
   }
 
   private async releaseFunds(record: PaymentRecord, reservationId: string): Promise<void> {
@@ -242,16 +182,16 @@ export class PaymentSagaService {
   }
 
   private async refundCharge(record: PaymentRecord, transactionId: string): Promise<void> {
-    const gateway = this.gateways.get(record.gatewayId);
-    const refund = await gateway.refund(transactionId);
+    // Compensation crosses the Guard too, but bypasses its gating (ADR 0005).
+    const refund = await this.guard.refund(record.gatewayId, transactionId);
     if (!refund.ok) {
-      await this.history(record, 'compensation', 'refund_failed', `${refund.failure.code}: ${refund.failure.message}`);
+      await this.history(record, 'compensation', 'refund_failed', `${refund.error.code}: ${refund.error.message}`);
       await this.audit.record({
         paymentId: record.id,
         type: 'saga.compensate.refund_charge',
-        detail: { transactionId, ok: false, failure: refund.failure.message },
+        detail: { transactionId, ok: false, failure: refund.error.message },
       });
-      const alertMsg = `CRITICAL: Payment ${record.id} compensation refund failed for charge ${transactionId}: ${refund.failure.message}`;
+      const alertMsg = `CRITICAL: Payment ${record.id} compensation refund failed for charge ${transactionId}: ${refund.error.message}`;
       this.traceLog.error(alertMsg, PaymentSagaService.name);
       await this.events.emit({
         type: 'metrics.alert',

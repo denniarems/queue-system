@@ -2,7 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
 import { AdaptiveTokenBucket, TokenBucketParams } from '../../src/gateway/adaptive-token-bucket.js';
-import { RateLimiterRegistry } from '../../src/gateway/rate-limiter.registry.js';
+import { GatewayGuard } from '../../src/gateway/gateway-guard.js';
 import { MockGatewayRegistry } from '../../src/gateway/mock-gateway.service.js';
 import { createTestApp, waitFor } from '../helpers/test-app.js';
 
@@ -65,9 +65,9 @@ describe('Ticket 04 — rate limiter gates dispatch without losing jobs', () => 
     });
     http = app.getHttpServer();
     const gateways = app.get(MockGatewayRegistry);
-    const limiters = app.get(RateLimiterRegistry);
+    const guard = app.get(GatewayGuard);
     gateways.configure('rlimA', { latencyMinMs: 3, latencyMaxMs: 3 });
-    limiters.configure('rlimA', { nominalRps: 2, burstFactor: 0.5 });
+    guard.configure('rlimA', { rateLimiter: { nominalRps: 2, burstFactor: 0.5 } });
   });
 
   afterAll(async () => {
@@ -104,7 +104,7 @@ describe('Ticket 04 — rate limiter gates dispatch without losing jobs', () => 
 describe('Ticket 04 — 429 responses trigger MD, consecutive successes trigger AI recovery', () => {
   let app: INestApplication;
   let http: ReturnType<INestApplication['getHttpServer']>;
-  let limiters: RateLimiterRegistry;
+  let guard: GatewayGuard;
   let gateways: MockGatewayRegistry;
 
   beforeAll(async () => {
@@ -113,7 +113,7 @@ describe('Ticket 04 — 429 responses trigger MD, consecutive successes trigger 
       return cfg;
     });
     http = app.getHttpServer();
-    limiters = app.get(RateLimiterRegistry);
+    guard = app.get(GatewayGuard);
     gateways = app.get(MockGatewayRegistry);
     gateways.configure('rlimB', {
       latencyMinMs: 2,
@@ -124,7 +124,7 @@ describe('Ticket 04 — 429 responses trigger MD, consecutive successes trigger 
       ],
       after: { kind: 'ok' },
     });
-    limiters.configure('rlimB', { nominalRps: 8, burstFactor: 4, aiStepRps: 1 });
+    guard.configure('rlimB', { rateLimiter: { nominalRps: 8, burstFactor: 4, aiStepRps: 1 } });
   });
 
   afterAll(async () => {
@@ -147,7 +147,7 @@ describe('Ticket 04 — 429 responses trigger MD, consecutive successes trigger 
       { label: 'AIMD payments complete', timeoutMs: 30_000 },
     );
 
-    const bucket = limiters.get('rlimB').getState();
+    const bucket = guard.health('rlimB');
     expect(bucket.throttleCount).toBe(2); // exactly the two scripted 429s
     expect(gateways.get('rlimB').stats.httpStatusHistogram[429]).toBe(2);
     expect(bucket.rate).toBe(8); // additive increase recovered to nominal
@@ -157,18 +157,18 @@ describe('Ticket 04 — 429 responses trigger MD, consecutive successes trigger 
 describe('Ticket 04 — one gateway throttling never affects another gateway', () => {
   let app: INestApplication;
   let http: ReturnType<INestApplication['getHttpServer']>;
-  let limiters: RateLimiterRegistry;
+  let guard: GatewayGuard;
   let gateways: MockGatewayRegistry;
 
   beforeAll(async () => {
     app = await createTestApp();
     http = app.getHttpServer();
-    limiters = app.get(RateLimiterRegistry);
+    guard = app.get(GatewayGuard);
     gateways = app.get(MockGatewayRegistry);
     gateways.configure('limC', { latencyMinMs: 5, latencyMaxMs: 5 });
     gateways.configure('limD', { latencyMinMs: 5, latencyMaxMs: 5 });
-    limiters.configure('limC', { nominalRps: 1, burstFactor: 1 });
-    limiters.configure('limD', { nominalRps: 40, burstFactor: 20 });
+    guard.configure('limC', { rateLimiter: { nominalRps: 1, burstFactor: 1 } });
+    guard.configure('limD', { rateLimiter: { nominalRps: 40, burstFactor: 20 } });
   });
 
   afterAll(async () => {

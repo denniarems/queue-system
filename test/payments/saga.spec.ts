@@ -80,7 +80,7 @@ describe('Ticket 06 — compensation: permanent charge failure releases the rese
       latencyMinMs: 2,
       latencyMaxMs: 2,
       steps: [],
-      after: { kind: 'fail', httpStatus: 400, retryable: false },
+      after: { kind: 'fail', httpStatus: 400 },
     });
   });
 

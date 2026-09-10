@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Job } from 'bullmq';
 import { EventBus } from '../common/event-bus.js';
 import { TraceLogger } from '../common/trace-logger.js';
-import { PaymentProcessingError } from '../domain/errors.js';
+import { toPaymentProcessingError } from '../domain/errors.js';
 import {
   PaymentJobData,
   PaymentRecord,
@@ -126,10 +126,8 @@ export class PaymentProcessor {
         });
         return { status: 'completed', paymentId, transactionId: outcome.transactionId };
       } catch (err) {
-        const failure =
-          err instanceof PaymentProcessingError
-            ? err
-            : new PaymentProcessingError(err instanceof Error ? err.message : String(err), 'unknown', true);
+        // Anything not already classified is presumed transient (RETRYABLE_CODES).
+        const failure = toPaymentProcessingError(err, record.gatewayId);
         await this.events.emit({
           type: 'job.completed',
           paymentId,
