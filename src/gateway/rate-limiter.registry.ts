@@ -19,18 +19,22 @@ export class RateLimiterRegistry {
     private readonly events: EventBus,
   ) {}
 
+  private createBucket(gatewayId: string, params: TokenBucketParams): AdaptiveTokenBucket {
+    return new AdaptiveTokenBucket(params, {
+      onThrottle: () => {
+        void this.events.emit({
+          type: 'rate_limit.throttled',
+          gatewayId,
+          at: new Date().toISOString(),
+        });
+      },
+    });
+  }
+
   get(gatewayId: string): AdaptiveTokenBucket {
     let bucket = this.buckets.get(gatewayId);
     if (!bucket) {
-      bucket = new AdaptiveTokenBucket(this.paramsFor(gatewayId), {
-        onThrottle: () => {
-          void this.events.emit({
-            type: 'rate_limit.throttled',
-            gatewayId,
-            at: new Date().toISOString(),
-          });
-        },
-      });
+      bucket = this.createBucket(gatewayId, this.paramsFor(gatewayId));
       this.buckets.set(gatewayId, bucket);
     }
     return bucket;
@@ -42,18 +46,7 @@ export class RateLimiterRegistry {
     if (bucket) {
       bucket.reconfigure(params);
     } else {
-      this.buckets.set(
-        gatewayId,
-        new AdaptiveTokenBucket(params, {
-          onThrottle: () => {
-            void this.events.emit({
-              type: 'rate_limit.throttled',
-              gatewayId,
-              at: new Date().toISOString(),
-            });
-          },
-        }),
-      );
+      this.buckets.set(gatewayId, this.createBucket(gatewayId, params));
     }
   }
 
