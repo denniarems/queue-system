@@ -1,12 +1,9 @@
 import { Controller, Get } from '@nestjs/common';
-import { AppService } from './app.service.js';
 
 @Controller()
 export class AppController {
-  constructor(private readonly appService: AppService) {}
-
   @Get()
-  getStatus() {
-    return this.appService.getStatus();
+  getStatus(): { name: string; status: string } {
+    return { name: 'queue-system', status: 'ok' };
   }
 }
