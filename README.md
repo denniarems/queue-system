@@ -108,9 +108,9 @@ All endpoints include full schema definitions, request/response payload models, 
 
 ## API Reference
 
-### Payments API
+### 1. Payments API
 
-#### Submit Payment
+#### Submit Payment (Immediate)
 ```http
 POST /payments
 Content-Type: application/json
@@ -123,20 +123,71 @@ X-Correlation-Id: corr_987654321
   "customerId": "cust_12345",
   "gatewayId": "stripe",
   "priority": "high",
-  "maxRetries": 3
+  "maxRetries": 3,
+  "metadata": { "orderId": "ord_999" }
+}
+```
+**Response (`201 Created` - Newly Enqueued):**
+```json
+{
+  "id": "pay_live_001",
+  "status": "queued"
+}
+```
+**Response (`200 OK` - Idempotent Replay):**
+```json
+{
+  "id": "pay_live_001",
+  "status": "completed",
+  "replayed": true,
+  "payment": {
+    "id": "pay_live_001",
+    "amount": 5000,
+    "currency": "USD",
+    "customerId": "cust_12345",
+    "gatewayId": "stripe",
+    "priority": "high",
+    "maxRetries": 3,
+    "metadata": { "orderId": "ord_999" },
+    "createdAt": "2026-09-10T12:00:00.000Z",
+    "status": "completed",
+    "retryCount": 0,
+    "sagaState": "settled",
+    "history": [
+      { "phase": "reserve", "event": "ok", "at": "2026-09-10T12:00:00.100Z" },
+      { "phase": "charge", "event": "ok", "at": "2026-09-10T12:00:00.250Z" },
+      { "phase": "settle", "event": "ok", "at": "2026-09-10T12:00:00.300Z" }
+    ],
+    "transactionId": "tx_stripe_abc123"
+  }
+}
+```
+
+#### Schedule Payment (Future-Dated or Delayed)
+```http
+POST /payments/scheduled
+Content-Type: application/json
+X-Correlation-Id: corr_987654321
+
+{
+  "id": "pay_sched_001",
+  "amount": 10000,
+  "currency": "USD",
+  "customerId": "cust_12345",
+  "gatewayId": "stripe",
+  "delayMs": 10000
 }
 ```
 **Response (`201 Created`):**
 ```json
 {
-  "paymentId": "pay_live_001",
-  "status": "pending",
-  "jobId": "pay_live_001",
-  "enqueuedAt": "2026-09-10T12:00:00.000Z"
+  "id": "pay_sched_001",
+  "status": "queued",
+  "scheduledFor": "2026-09-10T12:00:10.000Z"
 }
 ```
 
-#### Get Payment Status
+#### Get Payment Status & Audit Trail
 ```http
 GET /payments/pay_live_001
 ```
@@ -144,50 +195,97 @@ GET /payments/pay_live_001
 ```json
 {
   "id": "pay_live_001",
-  "status": "completed",
   "amount": 5000,
   "currency": "USD",
   "customerId": "cust_12345",
   "gatewayId": "stripe",
-  "transactionId": "tx_stripe_abc123",
-  "attempts": 1,
+  "priority": "high",
+  "maxRetries": 3,
+  "metadata": { "orderId": "ord_999" },
   "createdAt": "2026-09-10T12:00:00.000Z",
-  "completedAt": "2026-09-10T12:00:01.250Z"
+  "status": "completed",
+  "retryCount": 1,
+  "sagaState": "settled",
+  "history": [
+    { "phase": "reserve", "event": "ok", "at": "2026-09-10T12:00:00.050Z" },
+    { "phase": "charge", "event": "ok", "at": "2026-09-10T12:00:00.200Z" },
+    { "phase": "settle", "event": "ok", "at": "2026-09-10T12:00:00.250Z" }
+  ],
+  "transactionId": "tx_stripe_abc123"
 }
-```
-
-#### Dead-Letter Queue (DLQ) Management
-```http
-# List all dead-lettered payments
-GET /payments/dead-letters
-
-# Replay a specific dead-lettered payment
-POST /payments/dead-letters/pay_live_001/replay
 ```
 
 ---
 
-### Real-Time Metrics & WebSockets
+### 2. Dead-Letter Queue (DLQ) Management
 
-#### Instant Metrics Snapshot
+#### Inspect Dead-Letter Queue Entries
+```http
+GET /queues/dlq
+GET /queues/dlq?gatewayId=stripe
+```
+**Response (`200 OK`):**
+```json
+{
+  "count": 1,
+  "entries": [
+    {
+      "paymentId": "pay_failed_001",
+      "reason": "Retries exhausted (3/3): gateway timeout",
+      "deadLetteredAt": "2026-09-10T12:05:00.000Z",
+      "correlationId": "corr_987654321",
+      "payment": {
+        "id": "pay_failed_001",
+        "amount": 5000,
+        "currency": "USD",
+        "customerId": "cust_12345",
+        "gatewayId": "stripe",
+        "status": "dead_letter"
+      }
+    }
+  ]
+}
+```
+
+---
+
+### 3. Real-Time Metrics & Telemetry
+
+#### Operational Snapshot
 ```http
 GET /queues/metrics
 ```
 **Response (`200 OK`):**
 ```json
 {
-  "timestamp": 1725969600000,
+  "timestamp": "2026-09-10T12:00:00.000Z",
+  "windowSeconds": 60,
   "tps": 142.5,
   "errorRate": 0.012,
-  "latency": {
-    "p50": 45,
-    "p95": 180,
-    "p99": 350
+  "attempts": {
+    "ok": 120,
+    "failed": 2,
+    "total": 122
   },
-  "queues": {
-    "stripe": { "waiting": 12, "active": 8, "delayed": 3, "failed": 1 },
-    "paypal": { "waiting": 0, "active": 2, "delayed": 0, "failed": 0 }
-  }
+  "p95Ms": 180,
+  "p99Ms": 350,
+  "queueDepths": [
+    { "gatewayId": "stripe", "waiting": 12, "active": 4, "delayed": 2, "failed": 0 },
+    { "gatewayId": "paypal", "waiting": 0, "active": 1, "delayed": 0, "failed": 0 }
+  ],
+  "alerts": []
+}
+```
+
+#### Health Check
+```http
+GET /
+```
+**Response (`200 OK`):**
+```json
+{
+  "name": "queue-system",
+  "status": "ok"
 }
 ```
 
