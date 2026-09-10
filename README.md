@@ -95,6 +95,17 @@ bun run test:e2e
 
 ---
 
+## API Documentation (Swagger / OpenAPI)
+
+The application provides interactive OpenAPI 3.0 documentation powered by Swagger UI:
+
+- **Interactive Swagger UI:** [http://localhost:3000/docs](http://localhost:3000/docs)
+- **OpenAPI 3.0 JSON Specification:** [http://localhost:3000/docs-json](http://localhost:3000/docs-json)
+
+All endpoints include full schema definitions, request/response payload models, field-level descriptions, validation constraints, enum definitions, example payloads, and optional correlation tracking headers (`X-Correlation-Id`).
+
+---
+
 ## API Reference
 
 ### Payments API
