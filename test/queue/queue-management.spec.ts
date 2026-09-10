@@ -1,11 +1,10 @@
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
-import { Redis } from 'ioredis';
 import { APP_CONFIG, AppConfig } from '../../src/config/app-config.js';
 import { MockGatewayRegistry } from '../../src/gateway/mock-gateway.service.js';
 import { QueueManager } from '../../src/queue/queue-manager.service.js';
-import { createTestApp, waitFor } from '../helpers/test-app.js';
+import { createTestApp, readPaymentDirect, waitFor } from '../helpers/test-app.js';
 
 type Payload = { id: string; amount: number; currency: string; customerId: string; gatewayId: string };
 
@@ -217,6 +216,22 @@ describe('Ticket 02 — dynamic worker pools scale per gateway without losing jo
       timeoutMs: 10_000,
     });
   });
+
+  it('pause stops queue processing, resume restarts processing', async () => {
+    await manager.setWorkerPoolSize('pausegw', 1);
+    const id = `pay_pause_${randomUUID()}`;
+    await manager.pause('pausegw');
+
+    await request(http).post('/payments').send(payload(id, 'pausegw')).expect(201);
+    await new Promise((r) => setTimeout(r, 200));
+    expect((await getPayment(app, id)).status).toBe('queued');
+
+    await manager.resume('pausegw');
+    await waitFor(async () => (await getPayment(app, id)).status === 'completed', {
+      label: 'job processes after queue resume',
+      timeoutMs: 10_000,
+    });
+  });
 });
 
 describe('Ticket 02 — graceful shutdown lets in-flight jobs finish', () => {
@@ -243,14 +258,8 @@ describe('Ticket 02 — graceful shutdown lets in-flight jobs finish', () => {
     expect(Date.now() - closeStarted).toBeGreaterThanOrEqual(100);
 
     // The worker had to finish the in-flight payment before shutting down.
-    const redis = new Redis(config.redis.url, { maxRetriesPerRequest: null });
-    try {
-      const doc = await redis.hget(`payment:${id}`, 'doc');
-      const record = JSON.parse(doc!) as { status: string; completedAt?: string };
-      expect(record.status).toBe('completed');
-      expect(record.completedAt).toBeDefined();
-    } finally {
-      redis.disconnect();
-    }
+    const record = await readPaymentDirect(config.redis.url, id);
+    expect(record?.status).toBe('completed');
+    expect(record?.completedAt).toBeDefined();
   }, 20_000);
 });

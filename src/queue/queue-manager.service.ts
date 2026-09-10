@@ -4,7 +4,14 @@ import { Redis } from 'ioredis';
 import { APP_CONFIG } from '../config/app-config.js';
 import type { AppConfig } from '../config/app-config.js';
 import { CorrelationService } from '../common/event-bus.js';
-import { DLQ_JOB_NAME, DLQ_QUEUE_NAME, PaymentJobData, PRIORITY_TO_NUMERIC, QUEUE_JOB_NAME } from '../domain/payment.js';
+import {
+  DLQ_JOB_NAME,
+  DLQ_QUEUE_NAME,
+  PaymentJobData,
+  PaymentPriority,
+  PRIORITY_TO_NUMERIC,
+  QUEUE_JOB_NAME,
+} from '../domain/payment.js';
 
 interface GatewayRuntime {
   gatewayId: string;
@@ -12,6 +19,16 @@ interface GatewayRuntime {
   queue: Queue<PaymentJobData>;
   queueClient: Redis;
   workers: Array<{ worker: Worker<PaymentJobData>; client: Redis }>;
+}
+
+export interface EnqueuePaymentJobInput {
+  gatewayId: string;
+  paymentId: string;
+  correlationId?: string;
+  priority: PaymentPriority;
+  maxRetries: number;
+  delayMs?: number;
+  jobId: string;
 }
 
 export interface DlqEntry {
@@ -139,16 +156,32 @@ export class QueueManager implements OnApplicationShutdown {
     }
   }
 
+  /** Pause queue processing for a specific gateway or all active gateways. */
+  async pause(gatewayId?: string): Promise<void> {
+    if (gatewayId) {
+      const runtime = await this.ensureGateway(gatewayId);
+      await runtime.queue.pause();
+    } else {
+      for (const runtime of this.runtimes.values()) {
+        await runtime.queue.pause();
+      }
+    }
+  }
+
+  /** Resume queue processing for a specific gateway or all active gateways. */
+  async resume(gatewayId?: string): Promise<void> {
+    if (gatewayId) {
+      const runtime = await this.ensureGateway(gatewayId);
+      await runtime.queue.resume();
+    } else {
+      for (const runtime of this.runtimes.values()) {
+        await runtime.queue.resume();
+      }
+    }
+  }
+
   /** Enqueue a payment job with priority/delay semantics (ADR 0001). */
-  async enqueue(input: {
-    gatewayId: string;
-    paymentId: string;
-    correlationId?: string;
-    priority: 'high' | 'normal' | 'low';
-    maxRetries: number;
-    delayMs?: number;
-    jobId: string;
-  }): Promise<void> {
+  async enqueue(input: EnqueuePaymentJobInput): Promise<void> {
     const runtime = await this.ensureGateway(input.gatewayId);
     const backoff = this.config.queue;
     await runtime.queue.add(
