@@ -10,11 +10,13 @@ The system decouples synchronous HTTP payment ingress from asynchronous gateway 
 
 ![Distributed Payment Processing Queue System Architecture](distributed-payment-processing-queue-system.webp)
 
-### Interactive Workflow Diagram
+### Live Interactive Diagrams & Architecture Viewers
 
-Explore the distributed processing flow with live theme switching, trace animations, and guided operational chapters in the standalone HTML viewer:
-- **[Interactive Workflow Viewer (Archify Showcase)](docs/architecture/payment-processing-workflow.html)**
-- **[Workflow Specification](docs/architecture/payment-processing.workflow.json)**
+Explore the distributed processing architecture and execution flows with live theme switching, trace animations, and guided operational chapters:
+
+- 🌐 **[Live Architecture & Workflow Hub (Surge)](https://payment-queue-system.surge.sh)**
+- 🌐 **[System Architecture Diagram (Live)](https://payment-queue-system.surge.sh/payment-processing.html)** &bull; **[Local File](docs/architecture/payment-processing.html)** &bull; **[Architecture Spec](docs/architecture/payment-processing.architecture.json)**
+- 🌐 **[Processing Workflow & Trace Viewer (Live)](https://payment-queue-system.surge.sh/payment-processing-workflow.html)** &bull; **[Local File](docs/architecture/payment-processing-workflow.html)** &bull; **[Workflow Spec](docs/architecture/payment-processing.workflow.json)**
 
 ![Distributed Payment Processing Flow](distributed-payment-processing-flow.webp)
 
@@ -92,6 +94,32 @@ bun run test:cov
 # End-to-end validation tests
 bun run test:e2e
 ```
+
+### 5. Interactive API Test Wizard (POST APIs)
+After starting the server (`bun run start:dev`), run the interactive wizard to test the payment endpoints step-by-step:
+```bash
+# Run via npm / bun script
+bun run test:api:wizard
+
+# Or directly in Git Bash / WSL
+bash scripts/test-apis-wizard.sh
+```
+The wizard guides you through:
+1. **Connectivity & Swagger Docs:** Checks `GET /` and optionally opens Swagger UI.
+2. **Immediate Payment:** Submits `POST /payments` with high priority.
+3. **Atomic Idempotency:** Resubmits duplicate ID to verify `200 OK` replay.
+4. **Multi-Gateway Concurrency:** Tests isolated routing to `paypal`/`adyen`.
+5. **Scheduled Payments:** Submits delayed payment via `POST /payments/scheduled`.
+6. **Negative Validation:** Verifies `400 Bad Request` on malformed payloads.
+7. **Saga Audit Verification:** Inspects 3-step saga execution via `GET /payments/:id`.
+8. **Live Telemetry & DLQ:** Queries `GET /queues/metrics` and `GET /queues/dlq`.
+
+### 6. Deploy Architecture Diagrams to Surge
+To publish or update the live interactive diagrams on Surge:
+```bash
+bun run deploy:docs
+```
+Public URL: **[https://payment-queue-system.surge.sh](https://payment-queue-system.surge.sh)**
 
 ---
 
