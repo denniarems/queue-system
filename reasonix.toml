@@ -1,0 +1,2 @@
+[permissions]
+allow = ["Bash=cd D:\\code\\interview\\queue-system; git status --porcelain -uall | Select-String '^\\?\\?'; echo \"---GITIGNORE---\"; if (Test-Path .gitignore) { Get-Content .gitignore } else { \"no .gitignore\" }"]
