@@ -35,6 +35,17 @@ export class MetricsGateway implements OnModuleInit, OnModuleDestroy {
       this.events.on('payment.completed', (e) => this.broadcastPaymentEvent(e)),
       this.events.on('payment.failed', (e) => this.broadcastPaymentEvent(e)),
       this.events.on('payment.dead_lettered', (e) => this.broadcastPaymentEvent(e)),
+      this.events.on('saga.phase', (e) => {
+        if (e.type === 'saga.phase') {
+          this.server?.emit('payment:flow', {
+            paymentId: e.paymentId,
+            gatewayId: e.gatewayId,
+            phase: e.phase,
+            outcome: e.outcome,
+            at: e.at,
+          });
+        }
+      }),
       this.events.on('metrics.alert', (e) => {
         if (e.type === 'metrics.alert') this.server?.emit('alert:raised', e.alert);
       }),
