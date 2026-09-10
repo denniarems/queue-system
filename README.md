@@ -344,15 +344,62 @@ For complete deployment architectures, Kubernetes manifests, and operations runb
 
 ---
 
+## Architectural & System Design Q&A
+
+Comprehensive architectural analyses and technical trade-offs answering core system design questions are documented in **[`docs/architecture-qa.md`](docs/architecture-qa.md)**:
+
+| # | Question | Core Rationale & Mechanism | Routing |
+| :-: | :--- | :--- | :-: |
+| 1 | **Why BullMQ vs other queue systems?** | Native numeric priority scheduling (`1: high`, `2: normal`, `3: low`), arbitrary delay scheduling (`delayMs`), and shared Redis operational footprint—handling 50K–500K payments/hr at $<2\%$ capacity without Kafka/RabbitMQ broker overhead. | [Read Analysis &rarr;](docs/architecture-qa.md#1-why-bullmq-vs-other-queue-systems) |
+| 2 | **How to prevent duplicate processing?** | Two-phase Redis idempotency (`SET NX EX` lease lock + 24h cache), BullMQ `jobId` deduplication across states, worker-level execution locks, and downstream gateway idempotency headers. | [Read Analysis &rarr;](docs/architecture-qa.md#2-how-to-prevent-duplicate-processing) |
+| 3 | **Database vs Redis for state storage** | Sub-millisecond latency and native TTLs in Redis for hot-path transactional queues/leases vs. sharded relational SQL (e.g., PostgreSQL) for long-term ACID compliance, double-entry ledgers, and cold WORM archiving. | [Read Analysis &rarr;](docs/architecture-qa.md#3-database-vs-redis-for-state-storage) |
+| 4 | **Microservices vs monolithic approach** | Modular Monolith with zero-RPC in-process saga execution (`Reserve -> Guard -> Charge -> Settle`) and clean domain seams (`GatewayGuard`, `QueueManager`), horizontally scaled via Kubernetes with clean path to role-split deployments. | [Read Analysis &rarr;](docs/architecture-qa.md#4-microservices-vs-monolithic-approach) |
+| 5 | **Event sourcing considerations** | Current state-based design with append-only audit trail and ledger vs. pure event sourcing; trade-offs in optimistic concurrency versioning, projection read latency, and schema evolution. | [Read Analysis &rarr;](docs/architecture-qa.md#5-event-sourcing-considerations) |
+
+### Key Discussion Points Summary
+
+#### 1. [Why BullMQ vs other queue systems?](docs/architecture-qa.md#1-why-bullmq-vs-other-queue-systems)
+- **Failure Domain Isolation (ADR 0001):** Dedicated per-gateway queues (`bull:payments:{gatewayId}`) prevent slow or failing providers from starving healthy gateways.
+- **Native Priority & Delays:** Numeric priority scheduling and arbitrary delayed execution operate inside BullMQ without creating $N \times 3$ physical queues.
+- **Operational Simplicity:** Reuses the existing Redis 7+ cluster already backing idempotency and locks, eliminating ZooKeeper, KRaft, or Erlang brokers.
+- &rarr; *Full breakdown, comparison matrix (BullMQ vs Kafka vs RabbitMQ vs SQS), and metrics:* **[Read Answer in `docs/architecture-qa.md`](docs/architecture-qa.md#1-why-bullmq-vs-other-queue-systems)**
+
+#### 2. [How to prevent duplicate processing?](docs/architecture-qa.md#2-how-to-prevent-duplicate-processing)
+- **Two-Phase Idempotency (ADR 0002):** Atomic `SET idempotency:payment:{id} ... EX 600 NX` grants an exclusive `PROCESSING` lease during ingress; finalized state is cached with 24h TTL.
+- **BullMQ `jobId` Deduplication:** Native deduplication ensures identical payment IDs cannot be queued simultaneously.
+- **Worker Execution Lock:** Workers atomically acquire `lock:payment:process:{paymentId}` before saga execution to eliminate concurrent processing across worker replicas.
+- &rarr; *Full breakdown, sequence flow, and edge-case handling:* **[Read Answer in `docs/architecture-qa.md`](docs/architecture-qa.md#2-how-to-prevent-duplicate-processing)**
+
+#### 3. [Database vs Redis for state storage](docs/architecture-qa.md#3-database-vs-redis-for-state-storage)
+- **Hot-Path Redis Performance:** Sub-millisecond reads/writes, atomic lease acquisition, and automatic TTL expiration without background vacuum crons.
+- **Relational SQL for System of Record:** Permanent storage, strict ACID double-entry settlement ledgers, and partitioned monthly audit tables (`audit_YYYY_MM`).
+- **Sharding & Saga Design:** Customer-sharded SQL database with transaction-free sagas (self-compensating without 2PC).
+- &rarr; *Full breakdown, trade-off matrix, and sharding architecture:* **[Read Answer in `docs/architecture-qa.md`](docs/architecture-qa.md#3-database-vs-redis-for-state-storage)**
+
+#### 4. [Microservices vs monolithic approach](docs/architecture-qa.md#4-microservices-vs-monolithic-approach)
+- **Zero RPC Latency in Financial Hot Path:** In-process saga transitions eliminate serialization overhead and partial network failure modes.
+- **Clean Seams (ADR 0005):** Strict separation between `QueueManager` (lifecycle), `GatewayGuard` (resilience), and `PaymentSagaService` (business logic).
+- **Horizontal Scaling & Role Splitting:** Stateless application scales horizontally from 3 to 20 pods (`k8s/hpa.yaml`), with a clean evolution to `--role=api` and `--role=worker` container profiles.
+- &rarr; *Full breakdown, module boundaries, and decomposition roadmap:* **[Read Answer in `docs/architecture-qa.md`](docs/architecture-qa.md#4-microservices-vs-monolithic-approach)**
+
+#### 5. [Event sourcing considerations](docs/architecture-qa.md#5-event-sourcing-considerations)
+- **Current Append-Only Foundation:** Implements append-only audit lists (`audit:payment:{id}`) and double-entry settlement logs (`ledger:settlements`).
+- **Pure Event Sourcing Trade-Offs:** Explores non-repudiation and time-travel benefits against optimistic concurrency collisions (`expectedVersion`), projection read latency on `GET /payments/:id`, and event schema versioning (upcasting).
+- &rarr; *Full breakdown, architecture diagram, and trade-off comparison:* **[Read Answer in `docs/architecture-qa.md`](docs/architecture-qa.md#5-event-sourcing-considerations)**
+
+---
+
 ## Architectural Deep-Dives & Further Reading
 
 Detailed design records and engineering analyses are maintained in `docs/`:
+- **[Architectural & System Design Q&A (`docs/architecture-qa.md`)](docs/architecture-qa.md)** — In-depth answers to core design questions (BullMQ trade-offs, duplicate prevention, Redis vs SQL, monolith vs microservices, event sourcing).
 - **[Architecture Discussion (`docs/architecture-discussion.md`)](docs/architecture-discussion.md)** — Scaling from 50K to 500K payments/hour, database sharding strategies, multi-region disaster recovery (RPO/RTO), and PCI-DSS compliance boundaries.
 - **[Deployment Guide (`docs/deployment.md`)](docs/deployment.md)** — Local Docker Compose, Kubernetes manifests, zero-downtime rolling upgrades, and monitoring runbooks.
 - **[ADR 0001: Per-Gateway Queue Isolation (`docs/adr/0001-per-gateway-queues.md`)](docs/adr/0001-per-gateway-queues.md)** — Rationale for partitioned BullMQ namespaces.
 - **[ADR 0002: Two-Phase Redis Idempotency (`docs/adr/0002-two-phase-idempotency.md`)](docs/adr/0002-two-phase-idempotency.md)** — Atomic lease locks and deduplication design.
-- **[ADR 0003: Adaptive AIMD Rate Limiting (`docs/adr/0003-adaptive-rate-limiting.md`)](docs/adr/0003-adaptive-rate-limiting.md)** — Flow control algorithms under gateway pressure.
-- **[ADR 0004: Rolling In-Memory Metrics (`docs/adr/0004-rolling-window-metrics.md`)](docs/adr/0004-rolling-window-metrics.md)** — Zero-overhead operational latency histograms.
+- **[ADR 0003: Adaptive AIMD Rate Limiting (`docs/adr/0003-adaptive-token-bucket-rate-limiting.md`)](docs/adr/0003-adaptive-token-bucket-rate-limiting.md)** — Flow control algorithms under gateway pressure.
+- **[ADR 0004: Rolling In-Memory Metrics (`docs/adr/0004-rolling-window-metrics-and-websockets.md`)](docs/adr/0004-rolling-window-metrics-and-websockets.md)** — Zero-overhead operational latency histograms.
+- **[ADR 0005: Gateway Guard Seam (`docs/adr/0005-gateway-guard-seam.md`)](docs/adr/0005-gateway-guard-seam.md)** — Gating and outcome classification boundary.
 
 ---
 

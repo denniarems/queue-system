@@ -1,6 +1,7 @@
 # Architecture Discussion — Distributed Payment Processing Queue System
 
 Status: companion to the implementation (`spec.md`, tickets 01–08)
+Companion Q&A: for direct answers to core design questions, see **[Architectural & System Design Q&A (docs/architecture-qa.md)](architecture-qa.md)**.
 
 ## 1. System overview (as built)
 
