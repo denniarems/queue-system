@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-queue-service
+  labels:
+    app: payment-queue-system
+spec:
+  type: ClusterIP
+  selector:
+    app: payment-queue-system
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 3000
+      name: http

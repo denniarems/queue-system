@@ -12,6 +12,27 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: queue-system-api
+    ports:
+      - '3000:3000'
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - QUEUE_WORKER_POOL_SIZE=4
+      - RATE_LIMIT_NOMINAL_RPS=50
+      - METRICS_BROADCAST_INTERVAL_MS=1000
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   queue-system-redis-data:
