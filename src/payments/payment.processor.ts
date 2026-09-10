@@ -3,7 +3,13 @@ import { Job } from 'bullmq';
 import { EventBus } from '../common/event-bus.js';
 import { TraceLogger } from '../common/trace-logger.js';
 import { PaymentProcessingError } from '../domain/errors.js';
-import { PaymentJobData, PaymentRecord } from '../domain/payment.js';
+import {
+  PaymentJobData,
+  PaymentRecord,
+  transitionToCompleted,
+  transitionToDeadLetter,
+  transitionToProcessing,
+} from '../domain/payment.js';
 import { QueueManager } from '../queue/queue-manager.service.js';
 import { SPAN_NAMES, TracingService } from '../tracing/tracing.service.js';
 import { AuditLogService } from './audit-log.service.js';
@@ -66,93 +72,86 @@ export class PaymentProcessor {
     if (idem?.state === 'COMPLETED' || idem?.state === 'FAILED') {
       return { status: 'skipped', paymentId, reason: `already finalized as ${record.status}` };
     }
-    if (!idem) {
-      const claim = await this.idempotency.claim(paymentId);
-      if (claim.status === 'conflict' || claim.status === 'replayed') {
-        return { status: 'skipped', paymentId, reason: `idempotency ${claim.status}` };
-      }
+    const locked = await this.idempotency.acquireExecutionLock(paymentId);
+    if (!locked) {
+      return { status: 'skipped', paymentId, reason: 'concurrent execution lock held by another worker' };
     }
 
-    record.status = 'processing';
-    record.retryCount = job.attemptsMade;
-    record.processedAt = startedIso;
-    record.history.push({
-      phase: 'reserve',
-      event: `attempt ${job.attemptsMade + 1} started`,
-      at: startedIso,
-    });
-    await this.store.save(record);
-    await this.audit.record({ paymentId, type: 'payment.processing', detail: { attempt: job.attemptsMade + 1 } });
-    await this.events.emit({
-      type: 'payment.processing',
-      paymentId,
-      gatewayId: record.gatewayId,
-      correlationId,
-      status: 'processing',
-      at: startedIso,
-      detail: { attempt: job.attemptsMade + 1 },
-    });
-
     try {
-      const outcome = await this.saga.execute(record);
-      record.status = 'completed';
-      record.sagaState = 'settled';
-      record.completedAt = new Date().toISOString();
-      record.transactionId = outcome.transactionId;
-      record.reservationId = outcome.reservationId;
-      record.failureReason = undefined;
+      transitionToProcessing(record, job.attemptsMade, startedIso);
       await this.store.save(record);
-      await this.idempotency.finalize(paymentId, {
-        state: 'COMPLETED',
-        paymentStatus: 'completed',
-        transactionId: outcome.transactionId,
-      });
-      await this.audit.record({
-        paymentId,
-        type: 'payment.completed',
-        detail: { transactionId: outcome.transactionId },
-      });
+      await this.audit.record({ paymentId, type: 'payment.processing', detail: { attempt: job.attemptsMade + 1 } });
       await this.events.emit({
-        type: 'payment.completed',
+        type: 'payment.processing',
         paymentId,
         gatewayId: record.gatewayId,
         correlationId,
-        status: 'completed',
-        at: new Date().toISOString(),
+        status: 'processing',
+        at: startedIso,
+        detail: { attempt: job.attemptsMade + 1 },
       });
-      await this.events.emit({
-        type: 'job.completed',
-        paymentId,
-        gatewayId: record.gatewayId,
-        ok: true,
-        durationMs: Date.now() - startedAt,
-        at: new Date().toISOString(),
-      });
-      return { status: 'completed', paymentId, transactionId: outcome.transactionId };
-    } catch (err) {
-      const failure =
-        err instanceof PaymentProcessingError
-          ? err
-          : new PaymentProcessingError(err instanceof Error ? err.message : String(err), 'unknown', true);
-      await this.events.emit({
-        type: 'job.completed',
-        paymentId,
-        gatewayId: record.gatewayId,
-        ok: false,
-        durationMs: Date.now() - startedAt,
-        at: new Date().toISOString(),
-      });
-      if (!failure.retryable) {
-        return this.finalizeDeadLetter(record, failure.message, correlationId);
+
+      try {
+        const outcome = await this.saga.execute(record);
+        transitionToCompleted(record, outcome.transactionId, new Date().toISOString());
+        record.sagaState = 'settled';
+        record.reservationId = outcome.reservationId;
+        record.failureReason = undefined;
+        await this.store.save(record);
+        await this.idempotency.finalize(paymentId, {
+          state: 'COMPLETED',
+          paymentStatus: 'completed',
+          transactionId: outcome.transactionId,
+        });
+        await this.audit.record({
+          paymentId,
+          type: 'payment.completed',
+          detail: { transactionId: outcome.transactionId },
+        });
+        await this.events.emit({
+          type: 'payment.completed',
+          paymentId,
+          gatewayId: record.gatewayId,
+          correlationId,
+          status: 'completed',
+          at: new Date().toISOString(),
+        });
+        await this.events.emit({
+          type: 'job.completed',
+          paymentId,
+          gatewayId: record.gatewayId,
+          ok: true,
+          durationMs: Date.now() - startedAt,
+          at: new Date().toISOString(),
+        });
+        return { status: 'completed', paymentId, transactionId: outcome.transactionId };
+      } catch (err) {
+        const failure =
+          err instanceof PaymentProcessingError
+            ? err
+            : new PaymentProcessingError(err instanceof Error ? err.message : String(err), 'unknown', true);
+        await this.events.emit({
+          type: 'job.completed',
+          paymentId,
+          gatewayId: record.gatewayId,
+          ok: false,
+          durationMs: Date.now() - startedAt,
+          at: new Date().toISOString(),
+        });
+        if (!failure.retryable) {
+          return await this.finalizeDeadLetter(record, failure.message, correlationId);
+        }
+        record.history.push({
+          phase: 'charge',
+          event: `transient failure (${failure.code}), will retry`,
+          detail: failure.message,
+          at: new Date().toISOString(),
+        });
+        await this.store.save(record);
+        throw failure;
       }
-      record.history.push({
-        phase: 'charge',
-        event: `transient failure (${failure.code}), will retry`,
-        detail: failure.message,
-        at: new Date().toISOString(),
-      });
-      await this.store.save(record);
-      throw failure;
+    } finally {
+      await this.idempotency.releaseExecutionLock(paymentId);
     }
   }
 
@@ -166,9 +165,7 @@ export class PaymentProcessor {
     if (latest.status === 'dead_letter' || latest.status === 'completed') {
       return { status: 'skipped', paymentId: record.id, reason: `already ${latest.status}` };
     }
-    latest.status = 'dead_letter';
-    latest.failureReason = reason;
-    latest.history.push({ phase: 'compensation', event: 'dead_lettered', detail: reason, at: new Date().toISOString() });
+    transitionToDeadLetter(latest, reason);
     await this.store.save(latest);
     await this.idempotency.finalize(record.id, {
       state: 'FAILED',

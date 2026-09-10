@@ -40,6 +40,37 @@ export class IdempotencyService {
     }
   }
 
+  /** Remaining TTL of the idempotency record in milliseconds (service seam helper). */
+  async getTtlMs(paymentId: string): Promise<number> {
+    return this.redis.pttl(keyFor(paymentId));
+  }
+
+  /** Atomically acquire an exclusive execution lock for worker processing. */
+  async acquireExecutionLock(
+    paymentId: string,
+    lockTtlSeconds = this.config.idempotency.leaseTtlSeconds,
+  ): Promise<boolean> {
+    const lockKey = `lock:payment:process:${paymentId}`;
+    const acquired = await this.redis.set(lockKey, '1', 'EX', lockTtlSeconds, 'NX');
+    if (acquired !== 'OK') return false;
+
+    const existing = await this.get(paymentId);
+    const now = new Date().toISOString();
+    const record: IdempotencyRecord = {
+      paymentId,
+      state: 'PROCESSING',
+      claimedAt: existing?.claimedAt ?? now,
+      updatedAt: now,
+    };
+    await this.redis.set(keyFor(paymentId), JSON.stringify(record), 'EX', lockTtlSeconds);
+    return true;
+  }
+
+  /** Release the execution lock after worker processing. */
+  async releaseExecutionLock(paymentId: string): Promise<void> {
+    await this.redis.del(`lock:payment:process:${paymentId}`);
+  }
+
   /** Phase 1: atomically claim a processing lease. */
   async claim(paymentId: string): Promise<ClaimResult> {
     const now = new Date().toISOString();

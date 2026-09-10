@@ -1,8 +1,6 @@
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
-import { Redis } from 'ioredis';
-import { APP_CONFIG, AppConfig } from '../../src/config/app-config.js';
 import { IdempotencyService } from '../../src/payments/idempotency.service.js';
 import { PaymentStore } from '../../src/payments/payment-store.service.js';
 import { QueueManager } from '../../src/queue/queue-manager.service.js';
@@ -21,7 +19,6 @@ describe('Ticket 03 — two-phase Redis idempotency', () => {
   let store: PaymentStore;
   let manager: QueueManager;
   let registry: MockGatewayRegistry;
-  let config: AppConfig;
 
   beforeAll(async () => {
     app = await createTestApp((cfg) => {
@@ -34,7 +31,6 @@ describe('Ticket 03 — two-phase Redis idempotency', () => {
     store = app.get(PaymentStore);
     manager = app.get(QueueManager);
     registry = app.get(MockGatewayRegistry);
-    config = app.get(APP_CONFIG);
   });
 
   afterAll(async () => {
@@ -88,14 +84,9 @@ describe('Ticket 03 — two-phase Redis idempotency', () => {
     expect(record?.transactionId).toMatch(new RegExp(`^${gatewayId}_txn_`));
     expect(record?.paymentStatus).toBe('completed');
 
-    const redis = new Redis(config.redis.url, { maxRetriesPerRequest: null });
-    try {
-      const ttlMs = await redis.pttl(`idempotency:payment:${id}`);
-      expect(ttlMs).toBeGreaterThan(0);
-      expect(ttlMs).toBeLessThanOrEqual(86_400_000);
-    } finally {
-      redis.disconnect();
-    }
+    const ttlMs = await idempotency.getTtlMs(id);
+    expect(ttlMs).toBeGreaterThan(0);
+    expect(ttlMs).toBeLessThanOrEqual(86_400_000);
   });
 
   it('an expired lease (crashed worker) allows a fresh claim, and the queued job still completes exactly once', async () => {

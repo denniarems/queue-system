@@ -1,8 +1,11 @@
 import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { IoAdapter } from '@nestjs/platform-socket.io';
+import { Redis } from 'ioredis';
 import { APP_CONFIG, AppConfig, buildConfigForTest } from '../../src/config/app-config.js';
 import { AppModule } from '../../src/app.module.js';
+import { PaymentStore } from '../../src/payments/payment-store.service.js';
+import { PaymentRecord } from '../../src/domain/payment.js';
 
 export type ConfigPatch = (config: AppConfig) => AppConfig;
 
@@ -84,3 +87,14 @@ export async function waitFor(
 }
 
 export const now = () => Date.now();
+
+/** Read payment record directly using PaymentStore service without bypassing seam. */
+export async function readPaymentDirect(redisUrl: string, id: string): Promise<PaymentRecord | null> {
+  const redis = new Redis(redisUrl, { maxRetriesPerRequest: null });
+  try {
+    const store = new PaymentStore(redis);
+    return await store.get(id);
+  } finally {
+    redis.disconnect();
+  }
+}

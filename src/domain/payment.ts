@@ -88,6 +88,39 @@ export function createPaymentRecord(input: {
   };
 }
 
+export function transitionToProcessing(record: PaymentRecord, attempt: number, at = new Date().toISOString()): void {
+  record.status = 'processing';
+  record.retryCount = attempt;
+  record.processedAt = at;
+  record.history.push({
+    phase: 'reserve',
+    event: `attempt ${attempt + 1} started`,
+    at,
+  });
+}
+
+export function transitionToCompleted(
+  record: PaymentRecord,
+  transactionId: string | undefined,
+  at = new Date().toISOString(),
+): void {
+  record.status = 'completed';
+  record.completedAt = at;
+  if (transactionId) record.transactionId = transactionId;
+}
+
+export function transitionToFailed(record: PaymentRecord, failureReason: string, at = new Date().toISOString()): void {
+  record.status = 'failed';
+  record.failureReason = failureReason;
+  record.history.push({ phase: 'settle', event: 'failed', detail: failureReason, at });
+}
+
+export function transitionToDeadLetter(record: PaymentRecord, reason: string, at = new Date().toISOString()): void {
+  record.status = 'dead_letter';
+  record.failureReason = reason;
+  record.history.push({ phase: 'compensation', event: 'dead_lettered', detail: reason, at });
+}
+
 /** Two-phase idempotency record (ADR 0002): PROCESSING -> COMPLETED | FAILED. */
 export const IDEMPOTENCY_STATES = ['PROCESSING', 'COMPLETED', 'FAILED'] as const;
 export type IdempotencyState = (typeof IDEMPOTENCY_STATES)[number];
