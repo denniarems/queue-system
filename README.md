@@ -59,14 +59,14 @@ The execution engine follows an explicit, reversible saga workflow:
 ## Quick Start
 
 ### Prerequisites
-- [Node.js](https://nodejs.org/) v20+ or [Bun](https://bun.sh/)
+- [Bun](https://bun.sh/) v1.2+ (or Node.js v20+)
 - [Docker](https://www.docker.com/) & Docker Compose (for local Redis 7.4+)
 
 ### 1. Clone & Install Dependencies
 ```bash
 git clone https://github.com/your-org/queue-system.git
 cd queue-system
-npm install
+bun install
 ```
 
 ### 2. Start Redis
@@ -77,20 +77,20 @@ docker compose up -d redis
 ### 3. Run Development Server
 ```bash
 # Start API & workers with live-reload
-npm run start:dev
+bun run start:dev
 ```
 The server will start on `http://localhost:3000` with WebSocket gateway enabled.
 
 ### 4. Run Test Suite
 ```bash
 # Unit & integration tests (Vitest)
-npm test
+bun test
 
 # Test coverage report
-npm run test:cov
+bun run test:cov
 
 # End-to-end validation tests
-npm run test:e2e
+bun run test:e2e
 ```
 
 ---
