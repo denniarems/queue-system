@@ -26,6 +26,7 @@
     "@nestjs/core": "^12.0.1",
     "@nestjs/platform-express": "^12.0.1",
     "@nestjs/platform-socket.io": "^12.0.1",
+    "@nestjs/swagger": "^12.0.1",
     "@nestjs/websockets": "^12.0.1",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/context-async-hooks": "^2.11.0",
@@ -35,7 +36,8 @@
     "ioredis": "^6.0.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
-    "socket.io": "^4.8.3"
+    "socket.io": "^4.8.3",
+    "swagger-ui-express": "^5.0.1"
   },
   "devDependencies": {
     "@nestjs/cli": "^12.0.0",
@@ -45,6 +47,7 @@
     "@types/express": "^5.0.0",
     "@types/node": "^24.0.0",
     "@types/supertest": "^7.2.1",
+    "@types/swagger-ui-express": "^4.1.8",
     "@vitest/coverage-v8": "^4.1.2",
     "oxlint": "^1.58.0",
     "prettier": "^3.4.2",
