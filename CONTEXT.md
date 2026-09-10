@@ -12,6 +12,10 @@ _Avoid_: Transaction, charge, transfer, order
 An external payment provider (e.g., Stripe, PayPal, Adyen) capable of authorizing and settling payments.
 _Avoid_: Processor, vendor, acquirer
 
+**Gateway Guard**:
+The module that decides whether a call to a Payment Gateway may proceed, applies the Rate Limiter and the Circuit Breaker, classifies the outcome, and feeds it back to both controls. Compensation — refunding a charge — crosses the same seam but is exempt from that gating.
+_Avoid_: Gateway wrapper, Resilience service, Proxy, Dispatcher
+
 **Queue Manager**:
 The orchestrating component responsible for dynamically managing gateway queues, worker pools, and lifecycle events.
 _Avoid_: Dispatcher, task runner
